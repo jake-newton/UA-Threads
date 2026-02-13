@@ -1,9 +1,8 @@
-
 /*
     CYBV 489
-    Group 10: Raul Cano & Jovanni Blanco
+    Group 10: Jake Newton & Jose Aguilar
     Professor: Li Xu
-    Last Update: 1/29/2026
+    Last Update: 2/12/2026
 */
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -13,6 +12,9 @@
 #define STATUS_QUIT     4
 
 #include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include "THREADSLib.h"
 #include "Scheduler.h"
 #include "Processes.h"
@@ -31,6 +33,7 @@ static int gChildPid = -1;
 
 static int watchdog(char*);
 static inline void disableInterrupts();
+static inline void enableInterrupts();
 void dispatcher();
 static int launch(void*);
 static void check_deadlock();
@@ -38,6 +41,9 @@ static void DebugConsole(char* format, ...);
 static void clock_handler(char* devicename, uint8_t command, uint32_t status);
 static int isWatchdogName(const char* name);
 static Process* readyQ[HIGHEST_PRIORITY + 1];
+
+static int find_free_slot(void);
+void time_slice(void);
 
 /* DO NOT REMOVE */
 extern int SchedulerEntryPoint(void* pArgs);
@@ -84,18 +90,27 @@ int bootstrap(void* pArgs)
         processTable[i].pParent = NULL;
         processTable[i].pChildren = NULL;
         processTable[i].status = 0;
+        processTable[i].priority = 0;
+        processTable[i].entryPoint = NULL;
+        processTable[i].stack = NULL;
+        processTable[i].stacksize = 0;
+        processTable[i].name[0] = '\0';
+        processTable[i].startArgs[0] = '\0';
     }
-    
+
     runningProcess = NULL;
     nextPid = 1;
+
     /* Initialize the Ready list, etc. */
     for (int p = 0; p <= HIGHEST_PRIORITY; p++)
     {
         readyQ[p] = NULL;
     }
+
     /* Initialize the clock interrupt handler */
     intVector = get_interrupt_handlers();
     intVector[THREADS_TIMER_INTERRUPT] = clock_handler;
+
     /* startup a watchdog process */
     result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
     if (result < 0)
@@ -112,12 +127,36 @@ int bootstrap(void* pArgs)
         stop(1);
     }
 
+    {
+        int slot = 0;
+        for (int i = 0; i < MAX_PROCESSES; i++)
+        {
+            if (processTable[i].pid != 0 && strcmp(processTable[i].name, "Scheduler") == 0)
+            {
+                slot = i;
+                break;
+            }
+        }
+
+        if (slot != 0)
+        {
+            Process* saved = runningProcess;
+            runningProcess = &processTable[slot];
+            runningProcess->status = STATUS_RUNNING;
+
+            SchedulerEntryPoint(NULL);
+
+            runningProcess = saved;
+        }
+    }
+
     /* Initialized and ready to go!! */
     console_output(debugFlag, "All processes completed.\n");
     // not a real process, wont return any debug flags
 
+    stop(0);
     return 0;
-    
+
 }
 
 /*************************************************************************
@@ -139,7 +178,7 @@ int bootstrap(void* pArgs)
 int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int priority)
 {
     int proc_slot;
-    struct _process* pNewProc = malloc(sizeof(struct _process));
+    struct _process* pNewProc;
 
     DebugConsole("spawn(): creating process %s\n", name);
 
@@ -149,6 +188,7 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     if (name == NULL)
     {
         console_output(debugFlag, "spawn(): Name value is NULL.\n");
+        enableInterrupts();
         return -1;
     }
     if (strlen(name) >= (MAXNAME - 1))
@@ -157,34 +197,52 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
         stop(1);
     }
 
-    if (!(priority < 0 || priority > 5)) //checks if priority is between 0 and 5 
+    if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY)
     {
-        pNewProc->priority = &priority; //assign address of priority variable to pNewProc priority field
-    }
-    else
-    {
-        return -3; //if priority is not between 0 and 5 return -3
+        console_output(debugFlag, "spawn(): Priority out of range.\n");
+        enableInterrupts();
+        return -1;
     }
 
-
-    pNewProc->status = "Ready...";
-    pNewProc->startArgs[0] = &arg;
+    if (stacksize < THREADS_MIN_STACK_SIZE)
+    {
+        console_output(debugFlag, "spawn(): Stack size is too small\n");
+        enableInterrupts();
+        return -2;
+    }
 
     /* Find an empty slot in the process table */
+    proc_slot = find_free_slot();
+    if (proc_slot < 0)
+    {
+        enableInterrupts();
+        return -1;
+    }
 
-    proc_slot = 1;  // just use 1 for now!
     pNewProc = &processTable[proc_slot];
 
     /* Setup the entry in the process table. */
     strcpy(pNewProc->name, name);
+    pNewProc->pid = nextPid++;
+    pNewProc->priority = priority;
+    pNewProc->status = STATUS_READY;
+    pNewProc->entryPoint = entryPoint;
+    pNewProc->stacksize = (unsigned int)stacksize;
 
-    pNewProc->pid = gChildPid = nextPid++; //generate a new PID and set pNewProc and gChildPid to it
-    pNewProc->entryPoint = entryPoint; //assign entry point with new address
-
+    if (arg != NULL)
+    {
+        strncpy(pNewProc->startArgs, (char*)arg, MAXARG - 1);
+        pNewProc->startArgs[MAXARG - 1] = '\0';
+    }
+    else
+    {
+        pNewProc->startArgs[0] = '\0';
+    }
 
     /* If there is a parent process,add this to the list of children. */
     if (runningProcess != NULL)
     {
+        pNewProc->pParent = runningProcess;
     }
 
     /* Add the process to the ready list. */
@@ -192,18 +250,14 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     /* Initialize context for this process, but use launch function pointer for
      * the initial value of the process's program counter (PC)
     */
-
     pNewProc->context = context_initialize(launch, stacksize, arg);
 
-    if (!isWatchdogName(name)) //checks if watchdog process is being created
+    if (!isWatchdogName(name) && strcmp(name, "Scheduler") != 0)
     {
-        Process* psave = runningProcess; // saves running process in psave variable
-        runningProcess = pNewProc; //points to pNewProc treating the new process as current running process
-        entryPoint(arg); //calls run process
-        runningProcess = psave; //after function completes, runningProcess points to psave variable
+        gChildPid = pNewProc->pid;
     }
 
-
+    enableInterrupts();
     return pNewProc->pid;
 
 
@@ -226,10 +280,11 @@ static int launch(void* args)
     DebugConsole("launch(): started: %s\n", runningProcess->name);
 
     /* Enable interrupts */
+
     /* Call the function passed to spawn and capture its return value */
     DebugConsole("Process %d returned to launch\n", runningProcess->pid);
+
     /* Stop the process gracefully */
-    stop(1);
     return 0;
 }
 
@@ -248,16 +303,60 @@ static int launch(void* args)
 ************************************************************************ */
 int k_wait(int* code)
 {
-    while (!gChildExited) //busy wait loop for created child process
+    if (gChildPid < 0)
     {
+        return -4;
     }
 
-    if (code != NULL) //if the process is Null, store exit code
+    if (!gChildExited)
+    {
+        Process* child = NULL;
+        for (int i = 0; i < MAX_PROCESSES; i++)
+        {
+            if (processTable[i].pid == gChildPid)
+            {
+                child = &processTable[i];
+                break;
+            }
+        }
+
+        if (child != NULL)
+        {
+            Process* saved = runningProcess;
+
+            gChildExited = 0;
+            gChildExitCode = 0;
+
+            runningProcess = child;
+            runningProcess->status = STATUS_RUNNING;
+
+            int rc = 0;
+            if (runningProcess->entryPoint != NULL)
+            {
+                rc = runningProcess->entryPoint((void*)runningProcess->startArgs);
+            }
+
+            if (!gChildExited)
+            {
+
+                k_exit(rc);
+            }
+
+            runningProcess = saved;
+        }
+        else
+        {
+            gChildExitCode = -3;
+            gChildExited = 1;
+        }
+    }
+
+    if (code != NULL)
     {
         *code = gChildExitCode;
     }
 
-    return gChildPid; //return PID of terminated child process
+    return gChildPid;
 }
 
 
@@ -274,9 +373,8 @@ int k_wait(int* code)
 *************************************************************************/
 void k_exit(int code)
 {
-    gChildExitCode = code; //returns exit code value on exit
-    gChildExited = 1; //indicates completion
-
+    gChildExitCode = code;
+    gChildExited = 1;
 }
 
 /**************************************************************************
@@ -299,7 +397,8 @@ int k_kill(int pid, int signal)
 *************************************************************************/
 int k_getpid(void)
 {
-    return 0;
+    if (runningProcess == NULL) return -1;
+    return runningProcess->pid;
 }
 
 /**************************************************************************
@@ -367,6 +466,8 @@ void display_process_table(void)
 
 void dispatcher(void)
 {
+    return;
+
     Process* nextProcess = NULL;
     disableInterrupts();
 
@@ -374,11 +475,6 @@ void dispatcher(void)
     {
         enableInterrupts();
         return;
-    }
-    if (runningProcess != NULL && runningProcess->status == STATUS_RUNNING)
-    {
-        runningProcess->status = STATUS_READY;
-        ready_enqueue(runningProcess);
     }
 
     runningProcess = nextProcess;
@@ -433,6 +529,13 @@ static inline void disableInterrupts(void)
 
 } /* disableInterrupts */
 
+static inline void enableInterrupts(void)
+{
+    int psr = get_psr();
+    psr = psr | PSR_INTERRUPTS;
+    set_psr(psr);
+}
+
 /**************************************************************************
    Name - DebugConsole
    Purpose - Prints  the message to the console_output if in debug mode
@@ -467,8 +570,24 @@ static void clock_handler(char* devicename, uint8_t command, uint32_t status)
     time_slice();
 }
 
+void time_slice(void)
+{
+}
+
 /* This returns 1(true) if name is "watchdog", if not it returns 0.*/
 static int isWatchdogName(const char* name)
 {
     return (name != NULL && strcmp(name, "watchdog") == 0);
+}
+
+static int find_free_slot(void)
+{
+    for (int i = 1; i < MAX_PROCESSES; i++)
+    {
+        if (processTable[i].pid == 0)
+        {
+            return i;
+        }
+    }
+    return -1;
 }
