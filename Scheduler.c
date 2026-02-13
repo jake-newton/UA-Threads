@@ -41,7 +41,7 @@ static void DebugConsole(char* format, ...);
 static void clock_handler(char* devicename, uint8_t command, uint32_t status);
 static int isWatchdogName(const char* name);
 static Process* readyQ[HIGHEST_PRIORITY + 1];
-
+static int count_children(const Process* p);
 static int find_free_slot(void);
 void time_slice(void);
 
@@ -216,7 +216,7 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     if (proc_slot < 0)
     {
         enableInterrupts();
-        return -1;
+        return -4;
     }
 
     pNewProc = &processTable[proc_slot];
@@ -224,6 +224,10 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     /* Setup the entry in the process table. */
     strcpy(pNewProc->name, name);
     pNewProc->pid = nextPid++;
+    if (priority > 5 || priority < 0) {
+        console_output(debugFlag, "spawn(): Priority out of range\n");
+        return -3;
+    }
     pNewProc->priority = priority;
     pNewProc->status = STATUS_READY;
     pNewProc->entryPoint = entryPoint;
@@ -305,7 +309,7 @@ int k_wait(int* code)
 {
     if (gChildPid < 0)
     {
-        return -4;
+        return -1;
     }
 
     if (!gChildExited)
@@ -450,7 +454,50 @@ DWORD read_clock(void)
 
 void display_process_table(void)
 {
+    const char* statusStr;
+    console_output(FALSE,
+        "\n%-7s %-8s %-9s %-12s %-7s %-8s %s\n",
+        "PID", "Parent", "Priority", "Status", "# Kids", "CPUtime", "Name");
 
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        Process* p = &processTable[i];
+
+        if (p->pid == 0)
+            continue;
+
+        int parentPid = (p->pParent != NULL) ? p->pParent->pid : -1;
+        switch (p->status) {
+        case STATUS_READY:
+            statusStr = "READY";
+            break;
+        case STATUS_RUNNING:
+            statusStr = "RUNNING";
+            break;
+        case STATUS_BLOCKED:
+            statusStr = "BLOCKED";
+            break;
+        case STATUS_QUIT:
+            statusStr = "QUIT";
+            break;
+        default:
+            statusStr = "UNKNOWN";
+            break;
+        }
+
+        console_output(FALSE,
+            "%-7d %-8d %-9d %-12s %-7d %-8u %s\n",
+            p->pid,
+            parentPid,
+            p->priority,
+            statusStr,
+            count_children(p),
+            0,
+            (p->name[0] ? p->name : "(noname)")
+        );
+    }
+
+    console_output(FALSE, "\n");
 }
 
 /**************************************************************************
@@ -590,4 +637,14 @@ static int find_free_slot(void)
         }
     }
     return -1;
+}
+
+
+static int count_children(const Process* p)
+{
+    int count = 0;
+    for (Process* c = p->pChildren; c != NULL; c = c->nextSiblingProcess) {
+        count++;
+    }
+    return count;
 }

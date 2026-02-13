@@ -1,12 +1,54 @@
 {
   "Version": 1,
-  "WorkspaceRootPath": "C:\\CYBV_489\\THREADS-Scheduler Starter Project2\\THREADS-Scheduler\\UA-Threads\\",
-  "Documents": [],
+  "WorkspaceRootPath": "C:\\Users\\jwnew\\Dropbox\\Coding\\CYBV 489\\Collab\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{9C3A6259-D35E-453A-9A17-62B44C793A76}|Scheduler.vcxproj|C:\\Users\\jwnew\\Dropbox\\Coding\\CYBV 489\\Collab\\Scheduler.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{9C3A6259-D35E-453A-9A17-62B44C793A76}|Scheduler.vcxproj|solutionrelative:Scheduler.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{5C9BB95F-9C1A-460A-AD21-342AEE6D109A}|SchedulerTest04\\SchedulerTest04.vcxproj|C:\\Users\\jwnew\\Dropbox\\Coding\\CYBV 489\\Collab\\SchedulerTest04\\SchedulerTest04.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{5C9BB95F-9C1A-460A-AD21-342AEE6D109A}|SchedulerTest04\\SchedulerTest04.vcxproj|solutionrelative:SchedulerTest04\\SchedulerTest04.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    }
+  ],
   "DocumentGroupContainers": [
     {
       "Orientation": 0,
       "VerticalTabListWidth": 256,
-      "DocumentGroups": []
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 1,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "SchedulerTest04.c",
+              "DocumentMoniker": "C:\\Users\\jwnew\\Dropbox\\Coding\\CYBV 489\\Collab\\SchedulerTest04\\SchedulerTest04.c",
+              "RelativeDocumentMoniker": "SchedulerTest04\\SchedulerTest04.c",
+              "ToolTip": "C:\\Users\\jwnew\\Dropbox\\Coding\\CYBV 489\\Collab\\SchedulerTest04\\SchedulerTest04.c",
+              "RelativeToolTip": "SchedulerTest04\\SchedulerTest04.c",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAACIAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-13T18:33:54.553Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Scheduler.c",
+              "DocumentMoniker": "C:\\Users\\jwnew\\Dropbox\\Coding\\CYBV 489\\Collab\\Scheduler.c",
+              "RelativeDocumentMoniker": "Scheduler.c",
+              "ToolTip": "C:\\Users\\jwnew\\Dropbox\\Coding\\CYBV 489\\Collab\\Scheduler.c",
+              "RelativeToolTip": "Scheduler.c",
+              "ViewState": "AgIAAGQCAAAAAAAAAAAAAMYBAAAgAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-13T18:10:44.314Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
     }
   ]
 }
