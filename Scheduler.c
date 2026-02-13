@@ -284,7 +284,7 @@ static int launch(void* args)
     DebugConsole("launch(): started: %s\n", runningProcess->name);
 
     /* Enable interrupts */
-
+    enableInterrupts();
     /* Call the function passed to spawn and capture its return value */
     DebugConsole("Process %d returned to launch\n", runningProcess->pid);
 
@@ -392,8 +392,25 @@ void k_exit(int code)
 *************************************************************************/
 int k_kill(int pid, int signal)
 {
-    int result = 0;
-    return 0;
+    /* SIG_TERM- signal terminated */
+if (signal != SIG_TERM)
+    stop(1);
+
+/* Find process by pid */
+int slot = -1;
+for (int i = 0; i < MAX_PROCESSES; i++)
+{
+    if (processTable[i].pid == pid)
+    {
+        slot = i;
+        break;
+    }
+}
+
+if (slot < 0)
+    stop(1);
+
+return 0;
 }
 
 /**************************************************************************
@@ -410,7 +427,37 @@ int k_getpid(void)
 ***************************************************************************/
 int k_join(int pid, int* pChildExitCode)
 {
-    return 0;
+    if (runningProcess->pid == pid)
+    stop(1);
+
+/* Find target process */
+int slot = -1;
+for (int i = 0; i < MAX_PROCESSES; i++)
+{
+    if (processTable[i].pid == pid)
+    {
+        slot = i;
+        break;
+    }
+}
+
+/* Non-existing process */
+if (slot < 0)
+    stop(1);
+
+Process* target = &processTable[slot];
+
+/* Cannot join parent */
+if (runningProcess->pParent == target)
+    stop(2);
+
+/* Wait until process quits */
+while (target->status != STATUS_QUIT)
+{
+    if (signaled())
+        return -5;
+}
+return 0;
 }
 
 /**************************************************************************
@@ -418,7 +465,41 @@ int k_join(int pid, int* pChildExitCode)
 *************************************************************************/
 int unblock(int pid)
 {
-    return 0;
+    /*Find the process by pid */
+Process* p = NULL;
+for (int i = 0; i < MAX_PROCESSES; i++)
+{
+    if (processTable[i].pid == pid)
+    {
+        p = &processTable[i];
+        break;
+    }
+}
+
+/* pid not valid */
+if (p == NULL)
+    return -1;
+
+if (p->status != STATUS_BLOCKED && p->status <= 10)
+    return -1;
+
+/* mark ready */
+p->status = STATUS_READY;
+
+/* add back to ready queue */
+p->nextReadyProcess = NULL;
+if (readyQ[p->priority] == NULL)
+{
+    readyQ[p->priority] = p;
+}
+else
+{
+    Process* cur = readyQ[p->priority];
+    while (cur->nextReadyProcess != NULL)
+        cur = cur->nextReadyProcess;
+    cur->nextReadyProcess = p;
+}
+return 0;
 }
 
 /*************************************************************************
@@ -426,7 +507,26 @@ int unblock(int pid)
 *************************************************************************/
 int block(int newStatus)
 {
+        /* block_status must be greater than 10 */
+    if (newStatus <= 10)
+        stop(1);
+
+    /* If signaled before blocking, return -5 */
+    if (signaled())
+        return -5;
+
+    /* Set process state */
+    runningProcess->status = newStatus;
+
+
+    /* Switch to another process */
+    dispatcher();
+
+    if (signaled())
+        return -5;
+
     return 0;
+}
 }
 
 /*************************************************************************
@@ -434,7 +534,10 @@ int block(int newStatus)
 *************************************************************************/
 int signaled(void)
 {
+    if (runningProcess == NULL)
     return 0;
+
+return runningProcess->signaled;
 }
 /*************************************************************************
    Name - readtime
