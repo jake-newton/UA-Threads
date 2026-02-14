@@ -666,6 +666,7 @@ int block(int newStatus)
 
     return 0;
 }
+}
 
 /*************************************************************************
    Name - signaled
@@ -684,6 +685,8 @@ int signaled(void)
     }
 
     return 0;
+
+return runningProcess->signaled;
 }
 /*************************************************************************
    Name - readtime
