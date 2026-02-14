@@ -17,5 +17,6 @@ typedef struct _process
 	char*	       stack;
 	unsigned int   stacksize;
 	int            status;            /* READY, QUIT, BLOCKED, etc. */
+    int            exitCode;
 
 } Process;
