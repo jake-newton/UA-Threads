@@ -357,13 +357,9 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
 *************************************************************************/
 static int launch(void* args)
 {
-    if (runningProcess == NULL)
+    if (runningProcess != NULL)
     {
-        runningProcess = (Process*)args;
-        if (runningProcess != NULL)
-        {
-            runningProcess->status = STATUS_RUNNING;
-        }
+        runningProcess->status = STATUS_RUNNING;
     }
 
     DebugConsole("launch(): started: %s\n", runningProcess->name);
@@ -412,67 +408,53 @@ int k_wait(int* code)
         return -4;
     }
 
-    if (runningProcess->pChildren == NULL)
-    {
-        return -4;
-    }
-
     while (1)
     {
         disableInterrupts();
 
-        Process* prev = NULL;
-        Process* cur = runningProcess->pChildren;
+        int hasChild = 0;
 
-        while (cur != NULL)
+        for (int i = 0; i < MAX_PROCESSES; i++)
         {
-            if (cur->status == STATUS_QUIT)
+            if (processTable[i].pid != 0 && processTable[i].pParent == runningProcess)
             {
-                int pid = cur->pid;
-                int slot = get_slot_by_process(cur);
+                hasChild = 1;
 
-                if (code != NULL)
+                if (processTable[i].status == STATUS_QUIT)
                 {
-                    if (slot >= 0 && slot < MAX_PROCESSES) *code = exitCodeTable[slot];
-                    else *code = 0;
-                }
+                    int pid = processTable[i].pid;
 
-                if (prev == NULL)
-                {
-                    runningProcess->pChildren = cur->nextSiblingProcess;
-                }
-                else
-                {
-                    prev->nextSiblingProcess = cur->nextSiblingProcess;
-                }
+                    if (code != NULL)
+                    {
+                        *code = exitCodeTable[i];
+                    }
 
-                cur->nextSiblingProcess = NULL;
+                    processTable[i].pid = 0;
+                    processTable[i].context = NULL;
+                    processTable[i].nextReadyProcess = NULL;
+                    processTable[i].nextSiblingProcess = NULL;
+                    processTable[i].pParent = NULL;
+                    processTable[i].pChildren = NULL;
+                    processTable[i].status = 0;
+                    processTable[i].priority = 0;
+                    processTable[i].entryPoint = NULL;
+                    processTable[i].stack = NULL;
+                    processTable[i].stacksize = 0;
+                    processTable[i].name[0] = '\0';
+                    processTable[i].startArgs[0] = '\0';
+                    exitCodeTable[i] = 0;
+                    signalTable[i] = 0;
 
-                if (slot >= 0 && slot < MAX_PROCESSES)
-                {
-                    processTable[slot].pid = 0;
-                    processTable[slot].context = NULL;
-                    processTable[slot].nextReadyProcess = NULL;
-                    processTable[slot].nextSiblingProcess = NULL;
-                    processTable[slot].pParent = NULL;
-                    processTable[slot].pChildren = NULL;
-                    processTable[slot].status = 0;
-                    processTable[slot].priority = 0;
-                    processTable[slot].entryPoint = NULL;
-                    processTable[slot].stack = NULL;
-                    processTable[slot].stacksize = 0;
-                    processTable[slot].name[0] = '\0';
-                    processTable[slot].startArgs[0] = '\0';
-                    exitCodeTable[slot] = 0;
-                    signalTable[slot] = 0;
+                    enableInterrupts();
+                    return pid;
                 }
-
-                enableInterrupts();
-                return pid;
             }
+        }
 
-            prev = cur;
-            cur = cur->nextSiblingProcess;
+        if (!hasChild)
+        {
+            enableInterrupts();
+            return -4;
         }
 
         runningProcess->status = STATUS_BLOCKED;
@@ -586,7 +568,58 @@ int k_getpid(void)
 ***************************************************************************/
 int k_join(int pid, int* pChildExitCode)
 {
-    return 0;
+    if (runningProcess == NULL)
+    {
+        return -4;
+    }
+
+    while (1)
+    {
+        disableInterrupts();
+
+        int found = 0;
+        int childSlot = -1;
+
+        for (int i = 0; i < MAX_PROCESSES; i++)
+        {
+            if (processTable[i].pid == pid && processTable[i].pParent == runningProcess)
+            {
+                found = 1;
+                childSlot = i;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            enableInterrupts();
+            return -4;
+        }
+
+        if (processTable[childSlot].status == STATUS_QUIT)
+        {
+            if (pChildExitCode != NULL)
+            {
+                *pChildExitCode = exitCodeTable[childSlot];
+            }
+            enableInterrupts();
+            return pid;
+        }
+
+        runningProcess->status = STATUS_BLOCKED;
+
+        enableInterrupts();
+        dispatcher();
+
+        if (signaled())
+        {
+            if (pChildExitCode != NULL)
+            {
+                *pChildExitCode = -5;
+            }
+            return -5;
+        }
+    }
 }
 
 /**************************************************************************
