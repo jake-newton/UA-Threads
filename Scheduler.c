@@ -10,6 +10,8 @@
 #define STATUS_RUNNING  2
 #define STATUS_BLOCKED  3
 #define STATUS_QUIT     4
+#define QUANTUM_USEC 80000u
+
 
 #include <stdio.h>
 #include <string.h>
@@ -194,6 +196,10 @@ int bootstrap(void* pArgs)
         processTable[i].name[0] = '\0';
         processTable[i].startArgs[0] = '\0';
         processTable[i].exitCode = 0;
+        processTable[i].startTime = 0;
+        processTable[i].cpuTime = 0;
+        processTable[i].lastScheduled = 0;
+        processTable[i].started = 0;
         signalTable[i] = 0;
     }
 
@@ -229,7 +235,7 @@ int bootstrap(void* pArgs)
     dispatcher();
 
     /* Initialized and ready to go!! */
-    console_output(debugFlag, "All processes completed.\n");
+
     // not a real process, wont return any debug flags
 
     stop(0);
@@ -310,6 +316,11 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     pNewProc->nextSiblingProcess = NULL;
     pNewProc->pChildren = NULL;
     pNewProc->pParent = NULL;
+    pNewProc->startTime = 0;
+    pNewProc->cpuTime = 0;
+    pNewProc->lastScheduled = 0;
+    pNewProc->started = 0;
+
 
     if (arg != NULL)
     {
@@ -374,6 +385,11 @@ static int launch(void* args)
     if (runningProcess != NULL)
     {
         runningProcess->status = STATUS_RUNNING;
+        if (!runningProcess->started) {
+            runningProcess->startTime = read_clock();
+            runningProcess->started = 1;
+        }
+
     }
 
     DebugConsole("launch(): started: %s\n", runningProcess->name);
@@ -460,6 +476,9 @@ int k_wait(int* code)
                     child->name[0] = '\0';
                     child->startArgs[0] = '\0';
                     child->exitCode = 0;
+                    child->cpuTime = 0;
+                    child->startTime = 0;
+                    child->started = 0;
                     signalTable[i] = 0;
 
                     enableInterrupts();
@@ -690,13 +709,22 @@ int signaled(void)
 *************************************************************************/
 int read_time(void)
 {
-    return 0;
+    if (runningProcess == NULL) return 0;
+
+    uint32_t now = system_clock();
+
+    uint32_t cpu_us = runningProcess->cpuTime;
+
+    if (runningProcess->status == STATUS_RUNNING && runningProcess->lastScheduled != 0)
+        cpu_us += (now - runningProcess->lastScheduled);
+
+    return (int)(cpu_us / 1000u);
 }
 
 /*************************************************************************
    Name - readClock
 *************************************************************************/
-DWORD read_clock(void)
+uint32_t read_clock(void)
 {
     return system_clock();
 }
@@ -704,6 +732,7 @@ DWORD read_clock(void)
 void display_process_table(void)
 {
     const char* statusStr;
+
     console_output(FALSE,
         "\n%-7s %-8s %-9s %-12s %-7s %-8s %s\n",
         "PID", "Parent", "Priority", "Status", "# Kids", "CPUtime", "Name");
@@ -711,6 +740,14 @@ void display_process_table(void)
     for (int i = 0; i < MAX_PROCESSES; i++)
     {
         Process* p = &processTable[i];
+
+        uint32_t now = system_clock();
+        uint32_t cpu_us = p->cpuTime;
+
+        if (p->status == STATUS_RUNNING && p->lastScheduled != 0)
+            cpu_us += (now - p->lastScheduled);
+
+        uint32_t cpu_ms = cpu_us / 1000u;
 
         if (p->pid == 0)
             continue;
@@ -734,6 +771,8 @@ void display_process_table(void)
             break;
         }
 
+
+
         console_output(FALSE,
             "%-7d %-8d %-9d %-12s %-7d %-8u %s\n",
             p->pid,
@@ -741,7 +780,7 @@ void display_process_table(void)
             p->priority,
             statusStr,
             count_children(p),
-            0,
+            cpu_ms,
             (p->name[0] ? p->name : "(noname)"));
     }
     return;
@@ -761,6 +800,7 @@ void display_process_table(void)
 void dispatcher(void)
 {
     disableInterrupts();
+    uint32_t now = read_clock();
 
     Process* prev = runningProcess;
     Process* next = dequeue_ready_highest();
@@ -771,7 +811,21 @@ void dispatcher(void)
         return;
     }
 
+    if (prev != NULL && prev->status == STATUS_RUNNING)
+    {
+        if (prev->lastScheduled != 0) {
+            prev->cpuTime += (now - prev->lastScheduled);
+        }
+    }
+
     runningProcess = next;
+
+    if (!runningProcess->started) {
+        runningProcess->startTime = now;
+        runningProcess->started = 1;
+    }
+
+    runningProcess->lastScheduled = now;
     runningProcess->status = STATUS_RUNNING;
 
     if (prev != NULL && prev->status == STATUS_RUNNING)
@@ -804,7 +858,7 @@ static int watchdog(char* dummy)
     {
         if (!any_non_system_active())
         {
-            console_output(FALSE, "watchdog(): no non-system active processes; stopping.\n");
+            console_output(debugFlag, "All processes completed.\n");
             stop(0);
         }
         check_deadlock();
@@ -864,6 +918,18 @@ static void DebugConsole(char* format, ...)
     }
 }
 
+/**************************************************************************
+   Name - get_start_time
+   Purpose - This function returns the start time of the process in microseconds
+   Parameters - N/A
+   Returns - The function returns the calling process’s start time.
+   Side Effects -
+*************************************************************************/
+int get_start_time(void)
+{
+    if (runningProcess == NULL) return -1;
+    return (int)runningProcess->startTime;
+}
 
 /* there is no I/O yet, so return false. */
 int check_io_scheduler()
@@ -878,7 +944,24 @@ static void clock_handler(char* devicename, uint8_t command, uint32_t status)
 
 void time_slice(void)
 {
-    dispatcher();
+    disableInterrupts();
+
+    if (runningProcess == NULL || runningProcess->status != STATUS_RUNNING)
+    {
+        enableInterrupts();
+        return;
+    }
+
+    uint32_t now = system_clock();
+
+    if ((now - runningProcess->lastScheduled) >= QUANTUM_USEC)
+    {
+        enableInterrupts();
+        dispatcher();
+        return;
+    }
+
+    enableInterrupts();
 }
 
 /* This returns 1(true) if name is "watchdog", if not it returns 0.*/
